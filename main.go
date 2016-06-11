@@ -20,6 +20,8 @@ import (
 //Set notification to High @ 20 days
 //Set notification to Urgent @ 10 days, repeat once daily
 //Set notification to emergency @ 5 days and raise hell
+//TODO: better error handling
+//TODO: Detailed log statements
 
 var AwsRegions = []string{"us-east-1", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "sa-east-1"}
 
@@ -40,10 +42,10 @@ func listCerts() []*iam.ServerCertificateMetadata {
 	fmt.Println("Listing Certs")
 	svc := iam.New(session.New())
 	params := &iam.ListServerCertificatesInput{}
-	resp, error := svc.ListServerCertificates(params)
+	resp, err := svc.ListServerCertificates(params)
 
-	if error != nil {
-		fmt.Println("there was an error", error.Error())
+	if err != nil {
+		fmt.Println("there was an error", err.Error())
 	}
 	return resp.ServerCertificateMetadataList
 }
@@ -54,9 +56,9 @@ func listElbs() []*elb.LoadBalancerDescription {
 	for _, region := range AwsRegions {
 		svc := elb.New(session.New(&aws.Config{Region: aws.String(region)}))
 		fmt.Println("enumerating:", region)
-		resp, error := svc.DescribeLoadBalancers(params)
-		if error != nil {
-			fmt.Println("there was an error", error.Error())
+		resp, err := svc.DescribeLoadBalancers(params)
+		if err != nil {
+			fmt.Println("there was an error", err.Error())
 		}
 		for _, elb := range resp.LoadBalancerDescriptions {
 			elbList = append(elbList, elb)
@@ -72,8 +74,8 @@ func listELBsWithSSL(elb_list []*elb.LoadBalancerDescription) []ELB {
 		for _, elb_listener := range elb.ListenerDescriptions {
 			if *elb_listener.Listener.Protocol == "HTTPS" || *elb_listener.Listener.Protocol == "SSL" {
 				//				fmt.Println("bingo")
-				matechedElb := ELB{Name: *elb.DNSName, CertId: *elb_listener.Listener.SSLCertificateId}
-				ELBsWithSSl = append(ELBsWithSSl, matechedElb)
+				matchedElb := ELB{Name: *elb.DNSName, CertId: *elb_listener.Listener.SSLCertificateId}
+				ELBsWithSSl = append(ELBsWithSSl, matchedElb)
 			}
 
 		}
@@ -82,8 +84,8 @@ func listELBsWithSSL(elb_list []*elb.LoadBalancerDescription) []ELB {
 }
 func existsInStringArray(stringArray []string, stringToCheck string) bool {
 	var exists bool
-	for _, string := range stringArray {
-		if string == stringToCheck {
+	for _, str := range stringArray {
+		if str == stringToCheck {
 			exists = true
 		} else {
 			exists = false
@@ -93,11 +95,11 @@ func existsInStringArray(stringArray []string, stringToCheck string) bool {
 }
 func dedupStringArray(stringArray []string) []string {
 	var DedupedArray []string
-	for _, string := range stringArray {
-		if existsInStringArray(stringArray, string) {
+	for _, str := range stringArray {
+		if existsInStringArray(stringArray, str) {
 			continue
 		} else {
-			DedupedArray = append(DedupedArray, string)
+			DedupedArray = append(DedupedArray, str)
 		}
 
 	}
@@ -136,7 +138,7 @@ func groupELBsWithCerts(elb_list *[]ELB, cert_list []*iam.ServerCertificateMetad
 	}
 	return CertDetailsList
 }
-func checkExpiration(CertDetailsList []CertDetails) []CertDetails {
+func checkExpirationAndTriggerAlert(CertDetailsList []CertDetails) []CertDetails {
 	Out45 := float64(45)
 	Out30 := float64(30)
 	Out20 := float64(20)
@@ -172,7 +174,7 @@ func main() {
 	//fmt.Println(matching)
 	//fmt.Println(certs)
 	groupedCerts := groupELBsWithCerts(&matching, certs)
-	results, _ := json.Marshal(checkExpiration(groupedCerts))
+	results, _ := json.Marshal(checkExpirationAndTriggerAlert(groupedCerts))
 	fmt.Println(string(results))
 	fmt.Println("done")
 }
