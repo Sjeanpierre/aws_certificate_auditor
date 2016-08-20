@@ -1,7 +1,6 @@
 package main
 
 import (
-	//"encoding/json"
 	"fmt"
 	"time"
 	"log"
@@ -9,13 +8,14 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"encoding/json"
 	"github.com/zorkian/go-datadog-api"
 	"os"
-	"encoding/json"
 )
 
-
 var AwsRegions = []string{"us-east-1", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "sa-east-1"}
+
+var DEBUG = false
 
 type ELB struct {
 	Name   string
@@ -180,31 +180,34 @@ func postAlertEventDD(certInfo CertDetails) {
 	}
 	description := fmt.Sprintf("Certificate: %v  expiring in %0.f days.\n There are currently %v ELBs using this certificate. \n Details: %v  \n",
 		certInfo.Arn, certInfo.Daysleft, len(certInfo.AttachedELBs), string(certJson))
-	fmt.Println(description)
+	accountTag := fmt.Sprintf("aws_account:%s",os.Getenv("AWS_ACCOUNT_NAME"))
+	var tags = []string{accountTag}
+	if DEBUG {
+		fmt.Println(description)
+		return
+	}
 	event := datadog.Event{Title: "Certificate expiration notice",
 		Text: description,
 		Priority: "normal",
 		AlertType: certInfo.ExpirationStatus,
 		Aggregation: certInfo.Arn,
-	        SourceType: "certificate_checker"}
+		SourceType: "certificate_checker",
+		Tags: tags }
 
-	ddClient := datadog.NewClient(os.Getenv("API_KEY"),os.Getenv("APP_KEY"))
+	ddClient := datadog.NewClient(os.Getenv("DD_API_KEY"), os.Getenv("DD_APP_KEY"))
 	res, err := ddClient.PostEvent(&event)
 	if err != nil {
 		log.Println("Could not post event to DD", err.Error())
 	}
-	log.Printf("Posted event for %s successfully. Event ID: %x", certInfo.Arn,res.Id)
+	log.Printf("Posted event for %s successfully. Event ID: %x", certInfo.Arn, res.Id)
 
 }
 
 func main() {
-	certs := listCerts() // global reach all certs are part of this response
-	elb := listElbs()    // Regional, must call per region
+	certs := listCerts()
+	elb := listElbs()
 	matching := listELBsWithSSL(elb)
-	//fmt.Println(matching)
-	//fmt.Println(certs)
 	groupedCerts := groupELBsWithCerts(&matching, certs)
 	checkExpirationAndTriggerAlert(groupedCerts)
-	//log.Println(string(results))
 	log.Println("Completed", time.Now())
 }
