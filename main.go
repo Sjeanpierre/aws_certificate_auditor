@@ -13,9 +13,7 @@ import (
 	"os"
 )
 
-var AwsRegions = []string{"us-east-1", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "sa-east-1"}
 
-var DEBUG = false
 
 type ELB struct {
 	Name   string
@@ -32,63 +30,43 @@ type CertDetails struct {
 }
 
 func listCerts() []*iam.ServerCertificateMetadata {
-	fmt.Println("Processing IAM Certs")
 	svc := iam.New(session.New())
 	params := &iam.ListServerCertificatesInput{}
 	resp, err := svc.ListServerCertificates(params)
 
 	if err != nil {
-		fmt.Println("there was an error listing certificates from AWS", err.Error())
-		log.Fatal(err.Error())
 	}
 	return resp.ServerCertificateMetadataList
 }
 
-func listElbs() []*elb.LoadBalancerDescription {
-	var elbList []*elb.LoadBalancerDescription
-	fmt.Println("Processing ELBs")
 	params := &elb.DescribeLoadBalancersInput{}
 	for _, region := range AwsRegions {
 		svc := elb.New(session.New(&aws.Config{Region: aws.String(region)}))
-		fmt.Println("enumerating ELBs in:", region)
 		resp, err := svc.DescribeLoadBalancers(params)
 		if err != nil {
-			fmt.Println("there was an error listing ELBS in", region, err.Error())
-			log.Fatal(err.Error())
 		}
 		for _, elb := range resp.LoadBalancerDescriptions {
 			elbList = append(elbList, elb)
 		}
 	}
-	return elbList
 }
 
-func listELBsWithSSL(elb_list []*elb.LoadBalancerDescription) []ELB {
-	var ELBsWithSSl []ELB
 	for _, elb := range elb_list {
-		//		fmt.Println(*elb.DNSName)
 		for _, elb_listener := range elb.ListenerDescriptions {
 			if *elb_listener.Listener.Protocol == "HTTPS" || *elb_listener.Listener.Protocol == "SSL" {
-				//				fmt.Println("bingo")
 				matchedElb := ELB{Name: *elb.DNSName, CertId: *elb_listener.Listener.SSLCertificateId}
 				ELBsWithSSl = append(ELBsWithSSl, matchedElb)
 			}
 
 		}
 	}
-	return ELBsWithSSl
 }
 
 func existsInStringArray(stringArray []string, stringToCheck string) bool {
-	var exists bool
 	for _, str := range stringArray {
 		if str == stringToCheck {
-			exists = true
-		} else {
-			exists = false
 		}
 	}
-	return exists
 }
 
 func dedupStringArray(stringArray []string) []string {
@@ -180,7 +158,6 @@ func postAlertEventDD(certInfo CertDetails) {
 	}
 	description := fmt.Sprintf("Certificate: %v  expiring in %0.f days.\n There are currently %v ELBs using this certificate. \n Details: %v  \n",
 		certInfo.Arn, certInfo.Daysleft, len(certInfo.AttachedELBs), string(certJson))
-	accountTag := fmt.Sprintf("aws_account:%s",os.Getenv("AWS_ACCOUNT_NAME"))
 	var tags = []string{accountTag}
 	if DEBUG {
 		fmt.Println(description)
