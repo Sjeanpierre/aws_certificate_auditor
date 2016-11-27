@@ -1,5 +1,10 @@
 package main
 
+//Required ENV VARS
+//DD_API_KEY
+//DD_APP_KEY
+//AWS_ACCOUNT_NAME
+
 import (
 	"fmt"
 	"time"
@@ -13,66 +18,89 @@ import (
 	"os"
 )
 
-
-
-type ELB struct {
-	Name   string
-	CertId string
+var awsRegions = []string{
+	"us-east-1",
+	"us-west-1",
+	"us-west-2",
+	"eu-west-1",
+	"eu-central-1",
+	"sa-east-1",
 }
 
-type CertDetails struct {
+var debug = false
+
+type awsELB struct {
+	name   string
+	certID string
+}
+
+type certDetails struct {
 	Arn              string
 	ExpirationDate   time.Time
 	Name             string
-	AttachedELBs     []ELB
+	AttachedELBs     []awsELB
 	ExpirationStatus string
 	Daysleft         float64
 }
 
 func listCerts() []*iam.ServerCertificateMetadata {
+	log.Println("Processing IAM Certs")
 	svc := iam.New(session.New())
 	params := &iam.ListServerCertificatesInput{}
 	resp, err := svc.ListServerCertificates(params)
 
 	if err != nil {
+		log.Fatal("there was an error listing certificates from AWS", err.Error())
 	}
 	return resp.ServerCertificateMetadataList
 }
 
+func listElbs() (elbList []*elb.LoadBalancerDescription) {
+	log.Println("Processing ELBs")
 	params := &elb.DescribeLoadBalancersInput{}
-	for _, region := range AwsRegions {
+	for _, region := range awsRegions {
 		svc := elb.New(session.New(&aws.Config{Region: aws.String(region)}))
+		log.Println("enumerating ELBs in:", region)
 		resp, err := svc.DescribeLoadBalancers(params)
 		if err != nil {
+			log.Fatal("there was an error listing ELBS in", region, err.Error())
 		}
 		for _, elb := range resp.LoadBalancerDescriptions {
 			elbList = append(elbList, elb)
 		}
 	}
+	return
 }
 
-	for _, elb := range elb_list {
-		for _, elb_listener := range elb.ListenerDescriptions {
-			if *elb_listener.Listener.Protocol == "HTTPS" || *elb_listener.Listener.Protocol == "SSL" {
-				matchedElb := ELB{Name: *elb.DNSName, CertId: *elb_listener.Listener.SSLCertificateId}
+func listELBsWithSSL(elbList []*elb.LoadBalancerDescription) (ELBsWithSSl []awsELB) {
+	for _, elb := range elbList {
+		for _, elbListener := range elb.ListenerDescriptions {
+			if *elbListener.Listener.Protocol == "HTTPS" || *elbListener.Listener.Protocol == "SSL" {
+				matchedElb := awsELB{
+					name: *elb.DNSName,
+					certID: *elbListener.Listener.SSLCertificateId,
+				}
 				ELBsWithSSl = append(ELBsWithSSl, matchedElb)
 			}
 
 		}
 	}
+	return
 }
 
 func existsInStringArray(stringArray []string, stringToCheck string) bool {
 	for _, str := range stringArray {
 		if str == stringToCheck {
+			return true
 		}
 	}
+	return false
 }
 
 func dedupStringArray(stringArray []string) []string {
 	var DedupedArray []string
 	for _, str := range stringArray {
-		if existsInStringArray(stringArray, str) {
+		if existsInStringArray(DedupedArray, str) {
 			continue
 		} else {
 			DedupedArray = append(DedupedArray, str)
@@ -82,43 +110,43 @@ func dedupStringArray(stringArray []string) []string {
 	return DedupedArray
 }
 
-func extractUniqueELBCerts(elb_list *[]ELB) []string {
+func extractUniqueELBCerts(elbList *[]awsELB) []string {
 	var ELBCerts []string
-	for _, elb := range *elb_list {
-		ELBCerts = append(ELBCerts, elb.CertId)
+	for _, elb := range *elbList {
+		ELBCerts = append(ELBCerts, elb.certID)
 	}
 	dedupedCertsList := dedupStringArray(ELBCerts)
 	return dedupedCertsList
 }
 
-func selectCertByArn(cert_list []*iam.ServerCertificateMetadata, cert_arn string) iam.ServerCertificateMetadata {
+func selectCertByArn(certList []*iam.ServerCertificateMetadata, certArn string) iam.ServerCertificateMetadata {
 	Certificate := iam.ServerCertificateMetadata{}
-	for _, cert_detail := range cert_list {
-		if *cert_detail.Arn == cert_arn {
-			Certificate = *cert_detail
+	for _, certDetail := range certList {
+		if *certDetail.Arn == certArn {
+			Certificate = *certDetail
 			break
 		}
 	}
 	return Certificate
 }
 
-func groupELBsWithCerts(elb_list *[]ELB, cert_list []*iam.ServerCertificateMetadata) []CertDetails {
-	var CertDetailsList []CertDetails
-	usedCerts := extractUniqueELBCerts(elb_list)
-	for _, cert_arn := range usedCerts {
-		var elbCollection []ELB
-		for _, elb := range *elb_list {
-			if elb.CertId == cert_arn {
+func groupELBsWithCerts(elbList *[]awsELB, certList []*iam.ServerCertificateMetadata) []certDetails {
+	var CertDetailsList []certDetails
+	usedCerts := extractUniqueELBCerts(elbList)
+	for _, certArn := range usedCerts {
+		var elbCollection []awsELB
+		for _, elb := range *elbList {
+			if elb.certID == certArn {
 				elbCollection = append(elbCollection, elb)
 			}
 		}
-		cert_details := selectCertByArn(cert_list, cert_arn)
-		CertDetailsList = append(CertDetailsList, CertDetails{Arn: cert_arn, ExpirationDate: *cert_details.Expiration, Name: *cert_details.ServerCertificateName, AttachedELBs: elbCollection})
+		Details := selectCertByArn(certList, certArn)
+		CertDetailsList = append(CertDetailsList, certDetails{Arn: certArn, ExpirationDate: *Details.Expiration, Name: *Details.ServerCertificateName, AttachedELBs: elbCollection})
 	}
 	return CertDetailsList
 }
 
-func checkExpirationAndTriggerAlert(CertDetailsList []CertDetails) []CertDetails {
+func checkExpirationAndTriggerAlert(CertDetailsList []certDetails) []certDetails {
 	Out45 := float64(45)
 	Out30 := float64(30)
 	Out20 := float64(20)
@@ -151,30 +179,37 @@ func checkExpirationAndTriggerAlert(CertDetailsList []CertDetails) []CertDetails
 	return CertDetailsList
 }
 
-func postAlertEventDD(certInfo CertDetails) {
-	certJson, err := json.MarshalIndent(certInfo, "", "  ")
+func postAlertEventDD(certInfo certDetails) {
+	certJSON, err := json.MarshalIndent(certInfo, "", "  ")
 	if err != nil {
 		log.Println("Could not marshall cert info to json", err.Error())
 	}
-	description := fmt.Sprintf("Certificate: %v  expiring in %0.f days.\n There are currently %v ELBs using this certificate. \n Details: %v  \n",
-		certInfo.Arn, certInfo.Daysleft, len(certInfo.AttachedELBs), string(certJson))
+	description := fmt.Sprintf("Certificate: %v  expiring in %0.f day(s).\n There are currently %v ELB(s) using this certificate. \n Details: %v  \n",
+		certInfo.Arn,
+		certInfo.Daysleft,
+		len(certInfo.AttachedELBs),
+		string(certJSON))
+	accountTag := fmt.Sprintf("aws_account:%s", os.Getenv("AWS_ACCOUNT_NAME"))
 	var tags = []string{accountTag}
-	if DEBUG {
+	if debug {
 		fmt.Println(description)
 		return
 	}
-	event := datadog.Event{Title: "Certificate expiration notice",
+	event := datadog.Event{
+		Title: "Certificate expiration notice",
 		Text: description,
 		Priority: "normal",
 		AlertType: certInfo.ExpirationStatus,
 		Aggregation: certInfo.Arn,
 		SourceType: "certificate_checker",
-		Tags: tags }
+		Tags: tags,
+	}
 
 	ddClient := datadog.NewClient(os.Getenv("DD_API_KEY"), os.Getenv("DD_APP_KEY"))
 	res, err := ddClient.PostEvent(&event)
 	if err != nil {
 		log.Println("Could not post event to DD", err.Error())
+		os.Exit(1)
 	}
 	log.Printf("Posted event for %s successfully. Event ID: %x", certInfo.Arn, res.Id)
 
