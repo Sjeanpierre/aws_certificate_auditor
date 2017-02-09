@@ -30,8 +30,8 @@ var awsRegions = []string{
 var debug = false
 
 type awsELB struct {
-	name   string
-	certID string
+	Name   string
+	CertID string
 }
 
 type certDetails struct {
@@ -77,8 +77,8 @@ func listELBsWithSSL(elbList []*elb.LoadBalancerDescription) (ELBsWithSSl []awsE
 		for _, elbListener := range elb.ListenerDescriptions {
 			if *elbListener.Listener.Protocol == "HTTPS" || *elbListener.Listener.Protocol == "SSL" {
 				matchedElb := awsELB{
-					name: *elb.DNSName,
-					certID: *elbListener.Listener.SSLCertificateId,
+					Name: *elb.DNSName,
+					CertID: *elbListener.Listener.SSLCertificateId,
 				}
 				ELBsWithSSl = append(ELBsWithSSl, matchedElb)
 			}
@@ -113,7 +113,7 @@ func dedupStringArray(stringArray []string) []string {
 func extractUniqueELBCerts(elbList *[]awsELB) []string {
 	var ELBCerts []string
 	for _, elb := range *elbList {
-		ELBCerts = append(ELBCerts, elb.certID)
+		ELBCerts = append(ELBCerts, elb.CertID)
 	}
 	dedupedCertsList := dedupStringArray(ELBCerts)
 	return dedupedCertsList
@@ -130,18 +130,22 @@ func selectCertByArn(certList []*iam.ServerCertificateMetadata, certArn string) 
 	return Certificate
 }
 
-func groupELBsWithCerts(elbList *[]awsELB, certList []*iam.ServerCertificateMetadata) []certDetails {
+func groupELBsWithCerts(elbList []awsELB, certList []*iam.ServerCertificateMetadata) []certDetails {
 	var CertDetailsList []certDetails
-	usedCerts := extractUniqueELBCerts(elbList)
+	usedCerts := extractUniqueELBCerts(&elbList)
 	for _, certArn := range usedCerts {
 		var elbCollection []awsELB
-		for _, elb := range *elbList {
-			if elb.certID == certArn {
+		for _, elb := range elbList {
+			if elb.CertID == certArn {
 				elbCollection = append(elbCollection, elb)
 			}
 		}
 		Details := selectCertByArn(certList, certArn)
-		CertDetailsList = append(CertDetailsList, certDetails{Arn: certArn, ExpirationDate: *Details.Expiration, Name: *Details.ServerCertificateName, AttachedELBs: elbCollection})
+		certDetail := certDetails{Arn: certArn,
+			ExpirationDate: *Details.Expiration,
+			Name: *Details.ServerCertificateName,
+			AttachedELBs: elbCollection}
+		CertDetailsList = append(CertDetailsList,certDetail)
 	}
 	return CertDetailsList
 }
@@ -184,7 +188,7 @@ func postAlertEventDD(certInfo certDetails) {
 	if err != nil {
 		log.Println("Could not marshall cert info to json", err.Error())
 	}
-	description := fmt.Sprintf("Certificate: %v  expiring in %0.f day(s).\n There are currently %v ELB(s) using this certificate. \n Details: %v  \n",
+	description := fmt.Sprintf("Certificate: %v  expiring in %0.f day(s).\n There are currently %v ELB(s) using this certificate. \n Details: %+v  \n",
 		certInfo.Arn,
 		certInfo.Daysleft,
 		len(certInfo.AttachedELBs),
@@ -219,7 +223,7 @@ func main() {
 	certs := listCerts()
 	elb := listElbs()
 	matching := listELBsWithSSL(elb)
-	groupedCerts := groupELBsWithCerts(&matching, certs)
+	groupedCerts := groupELBsWithCerts(matching, certs)
 	checkExpirationAndTriggerAlert(groupedCerts)
 	log.Println("Completed", time.Now())
 }
