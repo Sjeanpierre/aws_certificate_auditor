@@ -1,0 +1,33 @@
+service: aws-cert-expiration-auditor
+
+provider:
+  name: aws
+  runtime: go1.x
+  region: eu-west-1
+  profile: prod
+  stage: global
+  memorySize: 128
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "iam:ListServerCertificates"
+        - "elasticloadbalancing:DescribeLoadBalancers"
+      Resource: "*"
+
+
+package:
+ exclude:
+   - ./**
+ include:
+   - ./bin/**
+
+functions:
+  audit:
+    handler: bin/audit
+    events:
+      - schedule: rate(24 hours)
+    environment:
+      DD_API_KEY: ${env:DD_API_KEY}
+      DD_APP_KEY: ${env:DD_APP_KEY}
+      AWS_ACCOUNT_NAME: "ELSM-PROD"
+    timeout: 180

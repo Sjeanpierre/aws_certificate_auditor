@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"github.com/zorkian/go-datadog-api"
 	"os"
+	"errors"
+	"github.com/aws/aws-lambda-go/lambda"
 )
 
 var awsRegions = []string{
@@ -45,7 +47,11 @@ type certDetails struct {
 
 func listCerts() []*iam.ServerCertificateMetadata {
 	log.Println("Processing IAM Certs")
-	svc := iam.New(session.New())
+	session,err := session.NewSession()
+	if err != nil {
+		log.Fatalf("Could not create new AWS session, check credentials")
+	}
+	svc := iam.New(session)
 	params := &iam.ListServerCertificatesInput{}
 	resp, err := svc.ListServerCertificates(params)
 
@@ -88,24 +94,16 @@ func listELBsWithSSL(elbList []*elb.LoadBalancerDescription) (ELBsWithSSl []awsE
 	return
 }
 
-func existsInStringArray(stringArray []string, stringToCheck string) bool {
-	for _, str := range stringArray {
-		if str == stringToCheck {
-			return true
-		}
-	}
-	return false
-}
-
 func dedupStringArray(stringArray []string) []string {
-	var DedupedArray []string
-	for _, str := range stringArray {
-		if existsInStringArray(DedupedArray, str) {
-			continue
-		} else {
-			DedupedArray = append(DedupedArray, str)
-		}
-
+	var DedupedArray []string //will hold the final results of the dedup process
+	//use hash map to dedup strings based on the fact that it does not allow duplicate keys.
+	//also avoids us having to iterate over the whole slice each time for existence checks
+	var a = make(map[string]struct{})
+	for _, s := range stringArray { //each unique string will only show once in this map
+		a[s] = struct{}{}
+	}
+	for key := range a { //take unique keys and append them to slice, slice only contains uniq values now
+		DedupedArray = append(DedupedArray,key)
 	}
 	return DedupedArray
 }
@@ -119,15 +117,14 @@ func extractUniqueELBCerts(elbList *[]awsELB) []string {
 	return dedupedCertsList
 }
 
-func selectCertByArn(certList []*iam.ServerCertificateMetadata, certArn string) iam.ServerCertificateMetadata {
+func selectCertByArn(certList []*iam.ServerCertificateMetadata, certArn string) (iam.ServerCertificateMetadata,error) {
 	Certificate := iam.ServerCertificateMetadata{}
 	for _, certDetail := range certList {
 		if *certDetail.Arn == certArn {
-			Certificate = *certDetail
-			break
+			return *certDetail,nil
 		}
 	}
-	return Certificate
+	return Certificate,errors.New("could not find cert")
 }
 
 func groupELBsWithCerts(elbList []awsELB, certList []*iam.ServerCertificateMetadata) []certDetails {
@@ -140,7 +137,10 @@ func groupELBsWithCerts(elbList []awsELB, certList []*iam.ServerCertificateMetad
 				elbCollection = append(elbCollection, elb)
 			}
 		}
-		Details := selectCertByArn(certList, certArn)
+		Details,err := selectCertByArn(certList, certArn)
+		if err != nil {
+			continue
+		}
 		certDetail := certDetails{Arn: certArn,
 			ExpirationDate: *Details.Expiration,
 			Name: *Details.ServerCertificateName,
@@ -219,11 +219,15 @@ func postAlertEventDD(certInfo certDetails) {
 
 }
 
-func main() {
+func Handler() {
 	certs := listCerts()
 	elb := listElbs()
 	matching := listELBsWithSSL(elb)
 	groupedCerts := groupELBsWithCerts(matching, certs)
 	checkExpirationAndTriggerAlert(groupedCerts)
 	log.Println("Completed", time.Now())
+}
+
+func main() {
+	lambda.Start(Handler)
 }

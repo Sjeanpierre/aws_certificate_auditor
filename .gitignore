@@ -1,5 +1,8 @@
+# Serverless directories
+.serverless
 
-.idea/
+# golang output binary directory
+bin
+
+.idea
 aws_certificate_auditor.iml
-
-cert_auditor.zip
